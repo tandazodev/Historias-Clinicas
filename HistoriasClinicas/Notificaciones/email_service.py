@@ -1,6 +1,6 @@
 import logging
 from django.conf import settings
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, send_mail
 from django.template.loader import render_to_string
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,8 @@ def enviar_email_notificacion(notificacion):
         logger.warning('Notificación %s: destinatario sin correo', notificacion.id)
         return False
 
-    if not settings.EMAIL_HOST_USER:
+    # Con SMTP hace falta usuario; con SES (rol IAM) o consola no.
+    if settings.EMAIL_BACKEND.endswith('smtp.EmailBackend') and not settings.EMAIL_HOST_USER:
         logger.warning('EMAIL_HOST_USER no configurado. Email no enviado.')
         return False
 

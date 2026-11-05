@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.http import JsonResponse
-from django.urls import include, path
+from django.conf import settings
+from django.urls import include, path, re_path
+from django.http import FileResponse
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -54,3 +56,19 @@ urlpatterns = [
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
+
+# El front llama a /backend/api/... (en Docker lo reescribe nginx). En AWS no hay nginx:
+# se acepta el mismo prefijo aquí.
+urlpatterns += [path('backend/', include([
+    path('', api_root),
+    path('api/token/', TokenObtainPairView.as_view()),
+    path('api/token/refresh/', TokenRefreshView.as_view()),
+]))]
+
+# SPA: cualquier ruta que no sea API/admin/static devuelve index.html del front compilado.
+_index = getattr(settings, 'FRONTEND_DIST', None) and (settings.FRONTEND_DIST / 'index.html')
+if _index and _index.exists():
+    def spa_index(request, *args, **kwargs):
+        return FileResponse(open(_index, 'rb'), content_type='text/html; charset=utf-8')
+
+    urlpatterns += [re_path(r'^(?!api/|admin/|static/|media/|backend/|health).*$', spa_index)]

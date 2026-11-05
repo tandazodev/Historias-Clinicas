@@ -30,7 +30,20 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-!349^8mv0^9_dsy**7_(wm%*p2
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver', '*']
+def _env_list(name, default=''):
+    return [v.strip() for v in os.getenv(name, default).split(',') if v.strip()]
+
+
+# En AWS: ALLOWED_HOSTS=<dns-del-alb>. Por defecto '*' para no romper el desarrollo local.
+# El health check del ALB (/health/) se responde antes de validar el Host (ver middleware).
+ALLOWED_HOSTS = _env_list('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver,*')
+
+# Detrás del ALB: confiar en X-Forwarded-Proto para saber si la petición original fue HTTPS.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = os.getenv('USE_X_FORWARDED_HOST', 'False') == 'True'
+SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False') == 'True'
+SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'False') == 'True'
+CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'False') == 'True'
 
 
 # Application definition
@@ -54,6 +67,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'HistoriasClinicas.middleware.HealthCheckMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -101,12 +115,29 @@ WSGI_APPLICATION = 'HistoriasClinicas.wsgi.application'
 
 DB_DIR = os.getenv('DB_DIR', str(BASE_DIR))
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': Path(DB_DIR) / 'db.sqlite3',
+if os.getenv('DB_HOST'):
+    # AWS: RDS PostgreSQL en la subred privada de datos.
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ['DB_NAME'],
+            'USER': os.environ['DB_USER'],
+            'PASSWORD': os.environ['DB_PASSWORD'],
+            'HOST': os.environ['DB_HOST'],
+            'PORT': os.getenv('DB_PORT', '5432'),
+            'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+            # RDS PostgreSQL 15+ rechaza conexiones sin SSL.
+            'OPTIONS': {'sslmode': os.getenv('DB_SSLMODE', 'require')},
+        }
     }
-}
+else:
+    # Desarrollo local / Docker Compose.
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': Path(DB_DIR) / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
@@ -149,6 +180,28 @@ STATIC_ROOT = Path(os.getenv('STATIC_ROOT', str(BASE_DIR / 'staticfiles')))
 MEDIA_URL = '/media/'
 MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
 
+# Archivos (certificados): S3 si AWS_STORAGE_BUCKET_NAME está definido; si no, disco local.
+# Las credenciales llegan por el rol IAM de la instancia (no se guardan claves en el código).
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}
+AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
+if AWS_STORAGE_BUCKET_NAME:
+    STORAGES['default'] = {'BACKEND': 'storages.backends.s3.S3Storage'}
+    AWS_S3_REGION_NAME = os.getenv('AWS_REGION', 'us-east-2')
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = True          # URLs firmadas y temporales: los certificados son privados
+    AWS_QUERYSTRING_EXPIRE = 300
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+
+# Frontend compilado (Vite) servido por Django/WhiteNoise: así el ALB solo apunta al puerto 8000.
+FRONTEND_DIST = Path(os.getenv('FRONTEND_DIST', str(BASE_DIR.parent / 'MediCampus-FrontEnd' / 'dist')))
+if FRONTEND_DIST.is_dir():
+    WHITENOISE_ROOT = FRONTEND_DIST
+    WHITENOISE_INDEX_FILE = True
+
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
@@ -166,9 +219,9 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://localhost:3000',
-]
+] + _env_list('CORS_ALLOWED_ORIGINS')
 
-CORS_ALLOW_ALL_ORIGINS = True  # Desarrollo: permite cualquier origen
+CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'True') == 'True'  # En AWS: False y usar CORS_ALLOWED_ORIGINS
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'authorization',
@@ -177,7 +230,7 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
-CSRF_TRUSTED_ORIGINS = ['http://localhost:5173']
+CSRF_TRUSTED_ORIGINS = ['http://localhost:5173'] + _env_list('CSRF_TRUSTED_ORIGINS')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -196,7 +249,11 @@ SIMPLE_JWT = {
 #   2. EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
 #   3. EMAIL_HOST_USER=tu.correo@gmail.com
 #   4. EMAIL_HOST_PASSWORD=<App Password de Gmail>
+# En AWS: EMAIL_BACKEND=django_ses.SESBackend (usa el rol IAM de la instancia; DEFAULT_FROM_EMAIL
+# debe ser una identidad verificada en SES, y en sandbox también el destinatario).
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+AWS_SES_REGION_NAME = os.getenv('AWS_REGION', 'us-east-2')
+AWS_SES_REGION_ENDPOINT = f'email.{AWS_SES_REGION_NAME}.amazonaws.com'
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'

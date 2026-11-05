@@ -1,5 +1,6 @@
 node_modules/
-dist/
+# dist/ se versiona para desplegar en EC2 sin Node
+
 .vite/
 .env
 .env.local

@@ -1,0 +1,13 @@
+[Unit]
+Description=API Historias Clinicas (Django + Gunicorn)
+After=network.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user/app/HistoriasClinicas
+EnvironmentFile=/etc/historias.env
+ExecStart=/home/ec2-user/venv/bin/gunicorn HistoriasClinicas.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120 --access-logfile - --error-logfile -
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

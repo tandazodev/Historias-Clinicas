@@ -27,3 +27,8 @@ python-dotenv==1.0.0
 
 # PDF generation
 reportlab==4.2.5
+
+# AWS
+boto3>=1.35
+django-storages[s3]>=1.14
+django-ses>=4.2
