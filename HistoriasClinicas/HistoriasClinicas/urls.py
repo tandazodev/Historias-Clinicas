@@ -9,6 +9,10 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
+# --- TEMPORAL: demostrar balanceo entre instancias (borrar después de la prueba) ---
+import socket
+from rest_framework.views import APIView
+from rest_framework.response import Response
 def api_root(request):
     """Vista raíz de la API"""
     return JsonResponse({
@@ -72,3 +76,10 @@ if _index and _index.exists():
         return FileResponse(open(_index, 'rb'), content_type='text/html; charset=utf-8')
 
     urlpatterns += [re_path(r'^(?!api/|admin/|static/|media/|backend/|health).*$', spa_index)]
+
+class InstanciaView(APIView):
+    def get(self, request):
+        return Response({'instancia': socket.gethostname(), 'usuario': request.user.correo})
+
+
+urlpatterns += [path('api/v1/instancia/', InstanciaView.as_view())]
